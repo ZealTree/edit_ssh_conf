@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTreeWidget, QTreeWidgetItem,
@@ -18,9 +19,10 @@ class SSHConfigEditor(QMainWindow):
         self.setWindowTitle("SSH Config Editor")
         self.setGeometry(100, 100, 800, 600)
 
-        # Initialize SSH config path using pathlib for cross-platform support
+        # Initialize paths
         self.ssh_dir = Path.home() / ".ssh"
         self.ssh_config_path = self.ssh_dir / "config"
+        self.profiles_dir = self.ssh_dir / "profiles"
         self.ensure_ssh_config_exists()
 
         self.hosts = {}  # {"group": [{"name": "host1", "options": [...], "raw_options": [...]], ...]}
@@ -33,9 +35,86 @@ class SSHConfigEditor(QMainWindow):
     def ensure_ssh_config_exists(self):
         """Ensure .ssh directory and config file exist with proper permissions."""
         self.ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.profiles_dir.mkdir(mode=0o700, exist_ok=True)
         if not self.ssh_config_path.exists():
             self.ssh_config_path.touch()
         os.chmod(self.ssh_config_path, 0o600)
+
+    # Profile management methods
+    def get_profiles(self):
+        """Return list of saved profile names."""
+        return [f.stem for f in self.profiles_dir.glob("*.conf") if f.is_file()]
+
+    def save_current_profile(self):
+        """Save current config as a named profile."""
+        name, ok = QInputDialog.getText(
+            self, "Save Profile", "Enter profile name:"
+        )
+        if ok and name:
+            if not re.match(r"^[\w\-]+$", name):
+                QMessageBox.warning(self, "Error", "Invalid profile name. Use only letters, numbers and underscores.")
+                return
+            
+            profile_path = self.profiles_dir / f"{name}.conf"
+            try:
+                shutil.copy(self.ssh_config_path, profile_path)
+                os.chmod(profile_path, 0o600)
+                self.profile_combo.addItem(name)
+                self.profile_combo.setCurrentText(name)
+                QMessageBox.information(self, "Success", f"Profile '{name}' saved!")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save profile: {str(e)}")
+
+    def load_profile(self, name):
+        """Load selected profile."""
+        if name == "Current":
+            return
+
+        profile_path = self.profiles_dir / f"{name}.conf"
+        if not profile_path.exists():
+            QMessageBox.warning(self, "Error", "Profile does not exist!")
+            return
+
+        reply = QMessageBox.question(
+            self, "Confirm Load",
+            f"Load profile '{name}'? Current configuration will be overwritten!",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # Create backup
+                backup_path = self.ssh_config_path.with_suffix(".bak")
+                shutil.copy(self.ssh_config_path, backup_path)
+                
+                # Replace config
+                shutil.copy(profile_path, self.ssh_config_path)
+                os.chmod(self.ssh_config_path, 0o600)
+                
+                self.load_config()
+                QMessageBox.information(self, "Success", f"Profile '{name}' loaded! Backup saved to {backup_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load profile: {str(e)}")
+
+    def delete_profile(self):
+        """Delete selected profile."""
+        name = self.profile_combo.currentText()
+        if name == "Current":
+            return
+
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Delete profile '{name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                (self.profiles_dir / f"{name}.conf").unlink()
+                self.profile_combo.removeItem(self.profile_combo.currentIndex())
+                QMessageBox.information(self, "Success", f"Profile '{name}' deleted!")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete profile: {str(e)}")
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -70,6 +149,28 @@ class SSHConfigEditor(QMainWindow):
 
         # Right panel (Host details)
         right_panel = QVBoxLayout()
+
+        # Profile management controls
+        profile_layout = QHBoxLayout()
+        self.profile_combo = QComboBox()
+        self.profile_combo.addItem("Current")
+        self.profile_combo.addItems(self.get_profiles())
+        profile_layout.addWidget(QLabel("Active Profile:"))
+        profile_layout.addWidget(self.profile_combo, 3)
+
+        btn_load_profile = QPushButton("Load")
+        btn_load_profile.clicked.connect(lambda: self.load_profile(self.profile_combo.currentText()))
+        profile_layout.addWidget(btn_load_profile)
+
+        btn_save_profile = QPushButton("Save As")
+        btn_save_profile.clicked.connect(self.save_current_profile)
+        profile_layout.addWidget(btn_save_profile)
+
+        btn_delete_profile = QPushButton("Delete")
+        btn_delete_profile.clicked.connect(self.delete_profile)
+        profile_layout.addWidget(btn_delete_profile)
+
+        right_panel.addLayout(profile_layout)
 
         # Group selection
         self.group_label = QLabel("Group:")
@@ -197,7 +298,7 @@ class SSHConfigEditor(QMainWindow):
         splitter.addWidget(right_widget)
 
         # Set initial sizes for splitter (left panel smaller)
-        splitter.setSizes([200, 600])  # Left panel: 200px, Right panel: 600px
+        splitter.setSizes([200, 600])
 
         # Set main widget
         central_widget = QWidget()
@@ -219,7 +320,7 @@ class SSHConfigEditor(QMainWindow):
         if file_path:
             # Normalize path for cross-platform compatibility
             file_path = str(Path(file_path))
-            if file_path.startswith(str(Path.home())):
+            if file_path.startswith(str(Path.home())): 
                 file_path = f"~/{Path(file_path).relative_to(Path.home())}"
             self.identity_file_edit.setText(file_path)
 
@@ -316,7 +417,6 @@ class SSHConfigEditor(QMainWindow):
         elif key == "hostname" and not self.is_valid_hostname(value):
             return False, "Invalid HostName (must be IP or domain)"
         elif key == "proxyjump":
-            # Allow any value since user can input custom ProxyJump
             return True, ""
         elif key in ("localforward", "remoteforward"):
             parts = value.split()
@@ -358,9 +458,9 @@ class SSHConfigEditor(QMainWindow):
                 # Check for three-line group header
                 if (
                     i + 2 < len(lines) and
-                    stripped_line.startswith("#####") and len(stripped_line) >= 45 and
-                    lines[i + 1].strip().startswith("# ") and
-                    lines[i + 2].strip().startswith("#####") and len(lines[i + 2].strip()) >= 45
+                    stripped_line.startswith("##") and
+                    lines[i + 1].strip().startswith("#") and
+                    lines[i + 2].strip().startswith("##")
                 ):
                     current_group = lines[i + 1].strip().lstrip("#").strip() or "Unnamed Group"
                     if current_group not in self.hosts:
@@ -369,7 +469,7 @@ class SSHConfigEditor(QMainWindow):
                     continue
 
                 # Fallback: detect single-line group headers
-                if stripped_line.startswith("#") and len(stripped_line) > 10 and all(c == '#' for c in stripped_line[:10]):
+                if stripped_line.startswith("##") and not stripped_line[2:].strip():
                     current_group = stripped_line.strip("#").strip() or "Unnamed Group"
                     if current_group not in self.hosts:
                         self.hosts[current_group] = []
@@ -461,12 +561,10 @@ class SSHConfigEditor(QMainWindow):
         current = self.proxy_jump_combo.currentText()
         self.proxy_jump_combo.clear()
         self.proxy_jump_combo.addItem("")
-        # Собираем все имена хостов, чтобы избежать дубликатов
         added_hosts = set()
         for group, hosts in self.hosts.items():
             for host in hosts:
                 host_name = host["name"]
-                # Проверяем, был ли хост уже добавлен
                 if host_name not in added_hosts:
                     self.proxy_jump_combo.addItem(host_name)
                     added_hosts.add(host_name)
