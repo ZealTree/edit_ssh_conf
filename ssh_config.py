@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import shutil
 from pathlib import Path
@@ -9,8 +10,8 @@ from PyQt6.QtWidgets import (
     QSpinBox, QCheckBox, QTableWidget, QTableWidgetItem, QScrollArea,
     QSplitter, QFileDialog, QMenu
 )
+from PyQt6.QtGui import QAction, QColor, QIcon
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QAction
 
 
 class SSHConfigEditor(QMainWindow):
@@ -18,6 +19,17 @@ class SSHConfigEditor(QMainWindow):
         super().__init__()
         self.setWindowTitle("SSH Config Editor")
         self.setGeometry(100, 100, 800, 600)
+
+        # Установка иконки приложения
+        if sys.platform.startswith('linux'):
+            # Для Linux используем .png, если он есть
+            icon_path = self.get_resource_path("assets/icon.png")
+            if not Path(icon_path).exists():
+                icon_path = self.get_resource_path("assets/icon.ico")  # Фallback на .ico
+        else:
+            # Для Windows и других платформ используем .ico
+            icon_path = self.get_resource_path("assets/icon.ico")
+        self.setWindowIcon(QIcon(icon_path))
 
         # Инициализация путей
         self.ssh_dir = Path.home() / ".ssh"
@@ -32,6 +44,16 @@ class SSHConfigEditor(QMainWindow):
         self.init_ui()
         self.load_config()
 
+    def get_resource_path(self, relative_path):
+        """Получает абсолютный путь к ресурсу, работает как в скрипте, так и в бинарнике."""
+        if hasattr(sys, '_MEIPASS'):
+            # Если скрипт скомпилирован, используем путь из _MEIPASS
+            base_path = Path(sys._MEIPASS)
+        else:
+            # Если запускается как скрипт, используем текущую директорию
+            base_path = Path(__file__).parent
+        return str(base_path / relative_path)
+    
     def ensure_ssh_config_exists(self):
         """Обеспечивает существование директории .ssh и файла config с правильными правами."""
         self.ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
