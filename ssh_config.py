@@ -132,7 +132,7 @@ class SSHConfigEditor(QMainWindow):
 
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                (self.profiles_dir / f"{name}.conf").unlink()  # Исправлено: name вместо некорректного текста
+                (self.profiles_dir / f"{name}.conf").unlink()
                 self.profile_combo.removeItem(self.profile_combo.currentIndex())
                 QMessageBox.information(self, "Успех", f"Профиль '{name}' удален!")
             except Exception as e:
@@ -163,8 +163,8 @@ class SSHConfigEditor(QMainWindow):
         self.hosts_tree = QTreeWidget()
         self.hosts_tree.setHeaderHidden(True)
         self.hosts_tree.itemClicked.connect(self.on_host_selected)
-        self.hosts_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)  # Включение контекстного меню
-        self.hosts_tree.customContextMenuRequested.connect(self.show_context_menu)  # Подключение обработчика
+        self.hosts_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.hosts_tree.customContextMenuRequested.connect(self.show_context_menu)
         left_panel.addWidget(self.hosts_tree)
 
         # Кнопки "Добавить хост" и "Добавить группу"
@@ -311,7 +311,7 @@ class SSHConfigEditor(QMainWindow):
         self.save_button = QPushButton("Сохранить")
         self.save_button.clicked.connect(self.save_host)
         buttons_layout.addWidget(self.save_button)
-        buttons_layout.addStretch()  # Растягивание для выравнивания
+        buttons_layout.addStretch()
         right_panel.addLayout(buttons_layout)
 
         # Добавление правой панели в сплиттер
@@ -340,7 +340,6 @@ class SSHConfigEditor(QMainWindow):
             self, "Выберите файл идентификации", str(Path.home() / ".ssh"), "Все файлы (*)"
         )
         if file_path:
-            # Нормализация пути для кроссплатформенной совместимости
             file_path = str(Path(file_path))
             if file_path.startswith(str(Path.home())): 
                 file_path = f"~/{Path(file_path).relative_to(Path.home())}"
@@ -421,7 +420,7 @@ class SSHConfigEditor(QMainWindow):
         self.other_options_table.setItem(row, 1, QTableWidgetItem(""))
 
     def is_valid_hostname(self, hostname):
-        """Проверяет, является ли hostname действительным IP или доменным именем."""
+        """Проверяет, является ли hostname действительным IP или доменным именем для ProxyJump."""
         if not hostname:
             return False
         ip_pattern = r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
@@ -430,34 +429,46 @@ class SSHConfigEditor(QMainWindow):
 
     def validate_option(self, key, value):
         """Проверяет формат опции SSH."""
-        if not value or not key:
-            return True, ""
-        key = key.lower()
+        if not key:
+            return False, "Ключ опции не может быть пустым"
+        if not value.strip():
+            return False, f"Значение для '{key}' не может быть пустым"
+
+        key = key.lower().strip()
+        value = value.strip()
+
         if key == "port":
             if not value.isdigit() or not (1 <= int(value) <= 65535):
                 return False, "Порт должен быть числом от 1 до 65535"
-        elif key == "hostname" and not self.is_valid_hostname(value):
-            return False, "Недопустимый HostName (должен быть IP или домен)"
         elif key == "proxyjump":
-            return True, ""
-        elif key in ("localforward", "remoteforward"):
-            parts = value.split()
-            if len(parts) != 2 or not parts[0].isdigit() or not (1 <= int(parts[0]) <= 65535):
-                return False, f"{key} должен быть в формате 'локальный_порт удаленный_хост:удаленный_порт'"
-            remote_host_port = parts[1].split(":")
-            if len(remote_host_port) != 2 or not remote_host_port[1].isdigit() or not (1 <= int(remote_host_port[1]) <= 65535):
-                return False, f"{key} удаленный хост должен быть в формате 'хост:порт'"
-            if not self.is_valid_hostname(remote_host_port[0]):
-                return False, f"{key} удаленный хост должен быть действительным IP или доменом"
+            hosts = [h.strip() for h in value.split(",")]
+            for host in hosts:
+                if not host:
+                    return False, "ProxyJump не может содержать пустых хостов"
+                # Проверяем, является ли host псевдонимом из self.hosts
+                is_host_alias = any(host == h["name"] for g in self.hosts.values() for h in g)
+                # Проверяем, является ли host валидным IP или доменом
+                is_valid_ip_or_domain = self.is_valid_hostname(host)
+                if not (is_host_alias or is_valid_ip_or_domain):
+                    return False, "ProxyJump должен содержать существующие псевдонимы хостов, действительные IP или доменные имена, разделённые запятыми"
         elif key == "dynamicforward":
+            if not value:
+                return False, "DynamicForward не может быть пустым"
             if not value.isdigit() or not (1 <= int(value) <= 65535):
                 return False, "DynamicForward должен быть номером порта от 1 до 65535"
         elif key == "connecttimeout":
             if not value.isdigit() or int(value) < 0:
                 return False, "ConnectTimeout должен быть неотрицательным числом"
         elif key == "stricthostkeychecking":
-            if value not in ("yes", "no", "ask"):
+            if value.lower() not in ("yes", "no", "ask"):
                 return False, "StrictHostKeyChecking должен быть 'yes', 'no' или 'ask'"
+        elif key == "identityfile":
+            path = os.path.expanduser(value)
+            if not os.path.isfile(path):
+                return False, f"IdentityFile '{value}' не существует"
+        elif key == "user":
+            if not re.match(r"^[a-zA-Z0-9_-]+$", value):
+                return False, "User должен содержать только буквы, цифры, подчеркивания или дефисы"
         return True, ""
 
     def load_config(self):
@@ -477,7 +488,6 @@ class SSHConfigEditor(QMainWindow):
                 line = lines[i]
                 stripped_line = line.strip()
 
-                # Проверка трехстрочного заголовка группы
                 if (
                     i + 2 < len(lines) and
                     stripped_line.startswith("##") and
@@ -490,7 +500,6 @@ class SSHConfigEditor(QMainWindow):
                     i += 3
                     continue
 
-                # Обнаружение однострочных заголовков групп
                 if stripped_line.startswith("##") and not stripped_line[2:].strip():
                     current_group = stripped_line.strip("#").strip() or "Безымянная группа"
                     if current_group not in self.hosts:
@@ -498,12 +507,10 @@ class SSHConfigEditor(QMainWindow):
                     i += 1
                     continue
 
-                # Пропуск пустых строк и нерелевантных комментариев
                 if not stripped_line or (stripped_line.startswith("#") and not stripped_line[1:].strip()):
                     i += 1
                     continue
 
-                # Обнаружение директивы Host
                 if line.lower().lstrip().startswith("host "):
                     parts = line.split()
                     host_names = [name.strip() for name in parts[1:]]
@@ -521,7 +528,6 @@ class SSHConfigEditor(QMainWindow):
                     i += 1
                     continue
 
-                # Добавление опций
                 if in_global_section and line.strip():
                     self.global_options.append(line.strip())
                 elif current_host and line.rstrip():
@@ -613,24 +619,22 @@ class SSHConfigEditor(QMainWindow):
         menu = QMenu(self)
         data = item.data(0, Qt.ItemDataRole.UserRole)
 
-        if data:  # Это хост
+        if data:
             group, host_name = data
-            if host_name == "*":  # Глобальные настройки
-                return  # Не показываем меню для Host *
+            if host_name == "*":
+                return
             
-            # Меню для хоста
             rename_host_action = QAction("Переименовать хост", self)
             rename_host_action.triggered.connect(lambda: self.rename_host(group, host_name))
             delete_host_action = QAction("Удалить хост", self)
             delete_host_action.triggered.connect(self.delete_host)
             menu.addAction(rename_host_action)
             menu.addAction(delete_host_action)
-        else:  # Это группа
+        else:
             group_name = item.text(0)
             if group_name == "Глобальные настройки":
-                return  # Не показываем меню для глобальных настроек
+                return
             
-            # Меню для группы
             rename_group_action = QAction("Переименовать группу", self)
             rename_group_action.triggered.connect(lambda: self.rename_group(group_name))
             delete_group_action = QAction("Удалить группу", self)
@@ -649,7 +653,6 @@ class SSHConfigEditor(QMainWindow):
         group, host_name = data
         self.current_host = (group, host_name)
 
-        # Очистка предыдущих полей перенаправления
         for widget, _, _, _ in self.local_forward_fields + self.remote_forward_fields:
             widget.deleteLater()
         for widget, _ in self.dynamic_forward_fields:
@@ -812,7 +815,6 @@ class SSHConfigEditor(QMainWindow):
             QMessageBox.warning(self, "Предупреждение", "Имя хоста не может быть пустым")
             return
 
-        # Сбор опций из полей
         if self.hostname_edit.text().strip():
             new_options.append(f"HostName {self.hostname_edit.text().strip()}")
             new_raw_options.append(f"\tHostName {self.hostname_edit.text().strip()}")
@@ -838,28 +840,24 @@ class SSHConfigEditor(QMainWindow):
             new_options.append(f"ConnectTimeout {self.connect_timeout_spin.value()}")
             new_raw_options.append(f"\tConnectTimeout {self.connect_timeout_spin.value()}")
 
-        # LocalForward
         for _, local_port, remote_host, remote_port in self.local_forward_fields:
             if local_port.value() and remote_host.text().strip() and remote_port.value():
                 value = f"{local_port.value()} {remote_host.text().strip()}:{remote_port.value()}"
                 new_options.append(f"LocalForward {value}")
                 new_raw_options.append(f"\tLocalForward {value}")
 
-        # RemoteForward
         for _, remote_port, local_host, local_port in self.remote_forward_fields:
             if remote_port.value() and local_host.text().strip() and local_port.value():
                 value = f"{remote_port.value()} {local_host.text().strip()}:{local_port.value()}"
                 new_options.append(f"RemoteForward {value}")
                 new_raw_options.append(f"\tRemoteForward {value}")
 
-        # DynamicForward
         for _, port in self.dynamic_forward_fields:
             if port.value():
                 value = f"{port.value()}"
                 new_options.append(f"DynamicForward {value}")
                 new_raw_options.append(f"\tDynamicForward {value}")
 
-        # Прочие опции
         for row in range(self.other_options_table.rowCount()):
             key_item = self.other_options_table.item(row, 0)
             value_item = self.other_options_table.item(row, 1)
@@ -869,7 +867,6 @@ class SSHConfigEditor(QMainWindow):
                 new_options.append(f"{key} {value}")
                 new_raw_options.append(f"\t{key} {value}")
 
-        # Валидация опций
         for option in new_options:
             parts = option.split(maxsplit=1)
             key = parts[0]
@@ -879,7 +876,6 @@ class SSHConfigEditor(QMainWindow):
                 QMessageBox.warning(self, "Недопустимая опция", error)
                 return
 
-        # Проверка уникальности хоста
         if not self.is_host_unique(new_group, new_name, old_group, old_name):
             QMessageBox.warning(self, "Предупреждение", f"Хост '{new_name}' уже существует")
             return
@@ -892,7 +888,6 @@ class SSHConfigEditor(QMainWindow):
             self.save_config()
             return
 
-        # Поиск и обновление хоста
         found = False
         for group in list(self.hosts.keys()):
             for i, host in enumerate(self.hosts[group]):
